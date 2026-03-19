@@ -23,7 +23,7 @@ const Navbar = () => {
     <div className="w-full">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 md:px-10 lg:px-8">
         <div className="flex-1">
-          <span className="cursive text-2xl font-extrabold">Project</span>
+          <span className="cursive text-2xl font-extrabold">Launchpad</span>
         </div>
 
         <div className="hidden flex-1 items-center justify-center gap-6 md:flex">
