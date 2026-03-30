@@ -1,0 +1,35 @@
+services: 
+  frontend: 
+    build: ./client  
+    ports: 
+      - "3000:3000" 
+    env_file: 
+      - ./client/.env 
+    depends_on: 
+      - backend 
+    networks: 
+      - my-net 
+  
+  backend: 
+    build: ./server 
+    ports: 
+      - "4000:4000" 
+    env_file: 
+      - ./server/.env
+    depends_on:
+      - mongo
+    networks: 
+      - my-net 
+  
+  mongo:
+    image: mongo:latest     
+    volumes: 
+      - mongo-data:/data/db 
+    networks: 
+      - my-net
+  
+volumes:
+  mongo-data: 
+  
+networks: 
+  my-net:

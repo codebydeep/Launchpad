@@ -7,8 +7,8 @@ import { ApiError } from "../utils/api-error.js";
 const isProduction = process.env.NODE_ENV === "production";
 const cookieOptions = {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax"
+    secure: false,
+    sameSite: "lax"
 };
 
 const registerUser = asyncHandler(async(req, res) => {
