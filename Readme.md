@@ -98,10 +98,4 @@
 ```bash
 docker compose up --build
 ```
-
-## License
-
-This project is licensed under the **MIT License**.
-
-You are free to use, copy, modify, merge, publish, distribute, sublicense, and sell copies of the software.  
-See the [LICENSE](./LICENSE) file for more details.
+---
