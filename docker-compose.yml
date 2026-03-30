@@ -12,8 +12,6 @@ services:
     image: 3453458134/app-backend 
     ports: 
       - "5000:4000" 
-    env_file: 
-      - ./server/.env
     depends_on:
       - mongo
     networks: 
