@@ -3,8 +3,6 @@ services:
     image: 3453458134/app-frontend
     ports: 
       - "3000:3000" 
-    env_file: 
-      - ./client/.env 
     depends_on: 
       - backend 
     networks: 
