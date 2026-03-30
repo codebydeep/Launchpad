@@ -1,6 +1,6 @@
 services: 
   frontend: 
-    build: ./client  
+    image: 3453458134/app-frontend
     ports: 
       - "3000:3000" 
     env_file: 
@@ -11,7 +11,7 @@ services:
       - my-net 
   
   backend: 
-    build: ./server 
+    image: 3453458134/app-backend 
     ports: 
       - "5000:4000" 
     env_file: 
