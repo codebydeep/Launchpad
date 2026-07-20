@@ -28,7 +28,7 @@ const Landing = () => {
 
           <p className="max-w-xs sm:max-w-md md:max-w-2xl text-sm sm:text-base md:text-lg text-gray-400 mt-2">
             Explore internships, startup jobs, events, scholarships, and
-            career-building programs designed to help students grow faster.
+            career-building programs designed to help students grow faster and with proper guidance.
           </p>
 
           <Button
