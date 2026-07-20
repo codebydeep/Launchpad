@@ -1,40 +1,26 @@
 #!/bin/bash
 set -euo pipefail
 
-# ── Logging ───────────────────────────────────────────────────────────────────
-exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
-echo ">>> Starting Launchpad deployment: $(date)"
+sudo dnf update -y
+sudo dnf install -y docker
 
-# ── System update + Docker install ────────────────────────────────────────────
-dnf update -y
-dnf install -y docker
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker ec2-user
 
-# Enable and start Docker
-systemctl enable docker
-systemctl start docker
-
-# Add ec2-user to docker group (takes effect on next login, not needed for this script)
-usermod -aG docker ec2-user
-
-# ── Docker Compose CLI plugin (v2) ────────────────────────────────────────────
 COMPOSE_VERSION="v2.27.1"
 COMPOSE_DIR="/usr/local/lib/docker/cli-plugins"
-mkdir -p "$COMPOSE_DIR"
+sudo mkdir -p "$COMPOSE_DIR"
 
-curl -fsSL \
+sudo curl -fsSL \
   "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
   -o "${COMPOSE_DIR}/docker-compose"
 
-chmod +x "${COMPOSE_DIR}/docker-compose"
+sudo chmod +x "${COMPOSE_DIR}/docker-compose"
 
-# Verify
-docker compose version
+sudo mkdir -p /opt/launchpad
 
-# ── App directory + docker-compose.yml ────────────────────────────────────────
-APP_DIR="/opt/launchpad"
-mkdir -p "$APP_DIR"
-
-cat > "${APP_DIR}/docker-compose.yml" <<'EOF'
+cat <<'EOF' | sudo tee /opt/launchpad/docker-compose.yml > /dev/null
 services:
   frontend:
     image: 3453458134/app-frontend:latest
@@ -68,10 +54,6 @@ networks:
   my-net:
 EOF
 
-# ── Pull images and start containers ──────────────────────────────────────────
-cd "$APP_DIR"
-
-docker compose pull
-docker compose up -d
-
-echo ">>> Launchpad deployment complete: $(date)"
+cd /opt/launchpad
+sudo docker compose pull
+sudo docker compose up -d

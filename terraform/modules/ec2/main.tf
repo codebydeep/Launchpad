@@ -95,7 +95,7 @@ resource "aws_instance" "this" {
     encrypted             = true
   }
 
-  user_data = var.user_data
+  user_data = null
 
   tags = merge(var.tags, {
     Name = var.name

@@ -4,31 +4,27 @@ pipeline {
     environment {
         FRONTEND_IMAGE = "3453458134/app-frontend:latest"
         BACKEND_IMAGE  = "3453458134/app-backend:latest"
+        SSH_USER       = "ec2-user"
     }
 
     stages {
 
-        // ── 1. Checkout ───────────────────────────────────────────────────────
         stage("Checkout") {
             steps {
                 git branch: "main", url: "https://github.com/codebydeep/Launchpad.git"
             }
         }
 
-        // ── 2. Docker Build & Push ────────────────────────────────────────────
         stage("Docker Build & Push") {
             steps {
                 script {
-                    // Verify jenkins user can reach Docker — fail fast with a clear message
                     sh '''
                         if ! docker info > /dev/null 2>&1; then
-                            echo "ERROR: Jenkins cannot connect to Docker daemon."
-                            echo "Fix: add jenkins user to docker group -> sudo usermod -aG docker jenkins && sudo systemctl restart jenkins"
+                            echo "ERROR: Jenkins cannot reach Docker. Run: sudo usermod -aG docker jenkins && sudo systemctl restart jenkins"
                             exit 1
                         fi
                     '''
                 }
-
                 withCredentials([usernamePassword(
                     credentialsId: "dockerhub-creds",
                     usernameVariable: "DOCKER_USER",
@@ -37,11 +33,9 @@ pipeline {
                     sh '''
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
 
-                        # Build and push frontend
                         docker build -t $FRONTEND_IMAGE ./client
                         docker push $FRONTEND_IMAGE
 
-                        # Build and push backend
                         docker build -t $BACKEND_IMAGE ./server
                         docker push $BACKEND_IMAGE
 
@@ -51,7 +45,6 @@ pipeline {
             }
         }
 
-        // ── 3. Terraform Init ─────────────────────────────────────────────────
         stage("Terraform Infra creation") {
             steps {
                 dir("terraform") {
@@ -60,7 +53,6 @@ pipeline {
             }
         }
 
-        // ── 4. Terraform Plan ─────────────────────────────────────────────────
         stage("Terraform Plan") {
             steps {
                 dir("terraform") {
@@ -69,7 +61,6 @@ pipeline {
             }
         }
 
-        // ── 5. Terraform Apply ────────────────────────────────────────────────
         stage("Terraform Apply") {
             steps {
                 dir("terraform") {
@@ -78,8 +69,7 @@ pipeline {
             }
         }
 
-        // ── 6. Verify Deployment ──────────────────────────────────────────────
-        stage("Verify Deployment") {
+        stage("Deploy via SSH") {
             steps {
                 dir("terraform") {
                     script {
@@ -88,8 +78,43 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-                        echo "EC2 Public IP: ${ip}"
-                        echo "Waiting for frontend to become available at http://${ip}:3000 ..."
+                        echo "Deploying to EC2 at ${ip}"
+
+                        withCredentials([sshUserPrivateKey(
+                            credentialsId: "ec2-ssh-key",
+                            keyFileVariable: "SSH_KEY"
+                        )]) {
+                            sh """
+                                chmod 400 \$SSH_KEY
+
+                                echo "Waiting for SSH to become available..."
+                                for i in \$(seq 1 20); do
+                                    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i \$SSH_KEY ${SSH_USER}@${ip} "echo ok" && break
+                                    echo "Attempt \$i/20 - retrying in 15s..."
+                                    sleep 15
+                                done
+
+                                scp -o StrictHostKeyChecking=no -i \$SSH_KEY \
+                                    ../terraform/scripts/deploy.sh \
+                                    ${SSH_USER}@${ip}:/tmp/deploy.sh
+
+                                ssh -o StrictHostKeyChecking=no -i \$SSH_KEY ${SSH_USER}@${ip} \
+                                    "chmod +x /tmp/deploy.sh && /tmp/deploy.sh"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage("Verify Deployment") {
+            steps {
+                dir("terraform") {
+                    script {
+                        def ip = sh(
+                            script: "terraform output -raw instance_public_ip",
+                            returnStdout: true
+                        ).trim()
 
                         def maxAttempts = 20
                         def waitSeconds = 15
@@ -103,7 +128,7 @@ pipeline {
                             ).trim()
 
                             if (status == "OK") {
-                                echo "✅ Frontend is up at http://${ip}:3000"
+                                echo "Frontend is up at http://${ip}:3000"
                                 success = true
                                 break
                             }
@@ -114,7 +139,7 @@ pipeline {
                         }
 
                         if (!success) {
-                            error("❌ Frontend did not respond after ${maxAttempts} attempts. Check EC2 user_data logs: /var/log/user-data.log")
+                            error("Frontend did not respond after ${maxAttempts} attempts.")
                         }
                     }
                 }
@@ -124,10 +149,10 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline completed successfully."
+            echo "Pipeline completed successfully."
         }
         failure {
-            echo "❌ Pipeline failed. Check stage logs above."
+            echo "Pipeline failed."
         }
         always {
             sh "docker logout || true"
