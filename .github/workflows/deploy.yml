@@ -1,0 +1,125 @@
+name: Terraform Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+env:
+  SSH_USER: ec2-user
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -reconfigure
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: |
+          terraform plan \
+          -var="public_key=${{ secrets.TF_PUBLIC_KEY }}"
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: |
+          terraform apply -auto-approve \
+          -var="public_key=${{ secrets.TF_PUBLIC_KEY }}"
+
+      - name: Read Terraform Output
+        id: terraform
+        working-directory: terraform
+        run: |
+          EC2_IP=$(terraform output -raw instance_public_ip)
+          echo "EC2_IP=$EC2_IP" >> $GITHUB_ENV
+          echo "ec2_ip=$EC2_IP" >> $GITHUB_OUTPUT
+          echo "EC2 IP: $EC2_IP"
+
+      - name: Create SSH Key
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
+          chmod 400 private_key.pem
+
+      - name: Wait for SSH
+        run: |
+          echo "Waiting for SSH..."
+
+          for i in {1..20}; do
+            ssh \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=5 \
+              -i private_key.pem \
+              $SSH_USER@$EC2_IP "echo ok" && break
+
+            echo "Attempt $i/20..."
+            sleep 15
+          done
+
+      - name: Copy deploy.sh
+        run: |
+          scp \
+            -o StrictHostKeyChecking=no \
+            -i private_key.pem \
+            terraform/scripts/deploy.sh \
+            $SSH_USER@$EC2_IP:/tmp/deploy.sh
+
+      - name: Execute Deployment
+        run: |
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -i private_key.pem \
+            $SSH_USER@$EC2_IP \
+            "chmod +x /tmp/deploy.sh && /tmp/deploy.sh"
+
+      - name: Verify Deployment
+        run: |
+          success=false
+
+          for i in {1..20}; do
+            echo "Attempt $i/20"
+
+            if curl -sf http://$EC2_IP:3000 >/dev/null; then
+              echo "Application is running."
+              echo "http://$EC2_IP:3000"
+              success=true
+              break
+            fi
+
+            sleep 15
+          done
+
+          if [ "$success" = false ]; then
+            echo "Deployment failed."
+            exit 1
+          fi
+
+      - name: Success
+        if: success()
+        run: |
+          echo "Pipeline completed successfully."
+          echo "Application URL: http://$EC2_IP:3000"
+
+      - name: Failure
+        if: failure()
+        run: echo "Pipeline failed."
