@@ -21,6 +21,6 @@ module "ec2" {
   root_volume_size    = var.root_volume_size
   public_key          = var.public_key
   ssh_allowed_cidrs   = var.ssh_allowed_cidrs
-  user_data           = var.user_data
+  user_data           = file("${path.module}/scripts/deploy.sh")
   tags                = local.common_tags
 }
