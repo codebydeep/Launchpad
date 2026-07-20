@@ -1,38 +1,3 @@
-terraform {
-  required_version = ">= 1.6.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-
-  backend "s3" {
-    bucket         = "aws-s3-buckets-app-eks-12345"
-    key            = "ms-app/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "ms-app-terraform-locks"
-    encrypt        = true
-  }
-}
-
-provider "aws" {
-  region = var.aws_region
-
-  default_tags {
-    tags = local.common_tags
-  }
-}
-
-locals {
-  common_tags = merge(var.tags, {
-    Project     = var.project_name
-    Environment = var.environment
-    ManagedBy   = "terraform"
-  })
-}
-
 module "vpc" {
   source = "./modules/vpc"
 
