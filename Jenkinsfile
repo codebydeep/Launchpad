@@ -2,9 +2,7 @@ pipeline {
     agent any
 
     environment {
-        FRONTEND_IMAGE = "3453458134/app-frontend:latest"
-        BACKEND_IMAGE  = "3453458134/app-backend:latest"
-        SSH_USER       = "ec2-user"
+        SSH_USER = "ec2-user"
     }
 
     stages {
@@ -12,36 +10,6 @@ pipeline {
         stage("Checkout") {
             steps {
                 git branch: "main", url: "https://github.com/codebydeep/Launchpad.git"
-            }
-        }
-
-        stage("Docker Build & Push") {
-            steps {
-                script {
-                    sh '''
-                        if ! docker info > /dev/null 2>&1; then
-                            echo "ERROR: Jenkins cannot reach Docker. Run: sudo usermod -aG docker jenkins && sudo systemctl restart jenkins"
-                            exit 1
-                        fi
-                    '''
-                }
-                withCredentials([usernamePassword(
-                    credentialsId: "dockerhub-creds",
-                    usernameVariable: "DOCKER_USER",
-                    passwordVariable: "DOCKER_PASS"
-                )]) {
-                    sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-
-                        docker build -t $FRONTEND_IMAGE ./client
-                        docker push $FRONTEND_IMAGE
-
-                        docker build -t $BACKEND_IMAGE ./server
-                        docker push $BACKEND_IMAGE
-
-                        docker logout
-                    '''
-                }
             }
         }
 
@@ -56,7 +24,9 @@ pipeline {
         stage("Terraform Plan") {
             steps {
                 dir("terraform") {
-                    sh "terraform plan"
+                    withCredentials([string(credentialsId: "tf-public-key", variable: "TF_PUBLIC_KEY")]) {
+                        sh "terraform plan -var='public_key=${TF_PUBLIC_KEY}'"
+                    }
                 }
             }
         }
@@ -64,83 +34,81 @@ pipeline {
         stage("Terraform Apply") {
             steps {
                 dir("terraform") {
-                    sh "terraform apply -auto-approve"
+                    withCredentials([string(credentialsId: "tf-public-key", variable: "TF_PUBLIC_KEY")]) {
+                        sh "terraform apply -auto-approve -var='public_key=${TF_PUBLIC_KEY}'"
+                    }
+                }
+            }
+        }
+
+        stage("Read Infra Outputs") {
+            steps {
+                dir("terraform") {
+                    script {
+                        env.EC2_IP = sh(
+                            script: "terraform output -raw instance_public_ip",
+                            returnStdout: true
+                        ).trim()
+                        echo "EC2 IP: ${env.EC2_IP}"
+                    }
                 }
             }
         }
 
         stage("Deploy via SSH") {
             steps {
-                dir("terraform") {
-                    script {
-                        def ip = sh(
-                            script: "terraform output -raw instance_public_ip",
-                            returnStdout: true
-                        ).trim()
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: "ec2-ssh-key",
+                    keyFileVariable: "SSH_KEY"
+                )]) {
+                    sh """
+                        chmod 400 \$SSH_KEY
 
-                        echo "Deploying to EC2 at ${ip}"
+                        echo "Waiting for SSH on ${env.EC2_IP}..."
+                        for i in \$(seq 1 20); do
+                            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i \$SSH_KEY ${SSH_USER}@${env.EC2_IP} "echo ok" && break
+                            echo "Attempt \$i/20 - retrying in 15s..."
+                            sleep 15
+                        done
 
-                        withCredentials([sshUserPrivateKey(
-                            credentialsId: "ec2-ssh-key",
-                            keyFileVariable: "SSH_KEY"
-                        )]) {
-                            sh """
-                                chmod 400 \$SSH_KEY
+                        scp -o StrictHostKeyChecking=no -i \$SSH_KEY \
+                            terraform/scripts/deploy.sh \
+                            ${SSH_USER}@${env.EC2_IP}:/tmp/deploy.sh
 
-                                echo "Waiting for SSH to become available..."
-                                for i in \$(seq 1 20); do
-                                    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i \$SSH_KEY ${SSH_USER}@${ip} "echo ok" && break
-                                    echo "Attempt \$i/20 - retrying in 15s..."
-                                    sleep 15
-                                done
-
-                                scp -o StrictHostKeyChecking=no -i \$SSH_KEY \
-                                    ../terraform/scripts/deploy.sh \
-                                    ${SSH_USER}@${ip}:/tmp/deploy.sh
-
-                                ssh -o StrictHostKeyChecking=no -i \$SSH_KEY ${SSH_USER}@${ip} \
-                                    "chmod +x /tmp/deploy.sh && /tmp/deploy.sh"
-                            """
-                        }
-                    }
+                        ssh -o StrictHostKeyChecking=no -i \$SSH_KEY ${SSH_USER}@${env.EC2_IP} \
+                            "chmod +x /tmp/deploy.sh && /tmp/deploy.sh"
+                    """
                 }
             }
         }
 
         stage("Verify Deployment") {
             steps {
-                dir("terraform") {
-                    script {
-                        def ip = sh(
-                            script: "terraform output -raw instance_public_ip",
+                script {
+                    def maxAttempts = 20
+                    def waitSeconds = 15
+                    def success = false
+
+                    for (int i = 1; i <= maxAttempts; i++) {
+                        echo "Attempt ${i}/${maxAttempts}..."
+                        def status = sh(
+                            script: "curl -sf http://${env.EC2_IP}:3000 > /dev/null 2>&1 && echo OK || echo FAIL",
                             returnStdout: true
                         ).trim()
 
-                        def maxAttempts = 20
-                        def waitSeconds = 15
-                        def success = false
-
-                        for (int i = 1; i <= maxAttempts; i++) {
-                            echo "Attempt ${i}/${maxAttempts}..."
-                            def status = sh(
-                                script: "curl -sf http://${ip}:3000 > /dev/null 2>&1 && echo OK || echo FAIL",
-                                returnStdout: true
-                            ).trim()
-
-                            if (status == "OK") {
-                                echo "Frontend is up at http://${ip}:3000"
-                                success = true
-                                break
-                            }
-
-                            if (i < maxAttempts) {
-                                sleep(waitSeconds)
-                            }
+                        if (status == "OK") {
+                            echo "Frontend is up at http://${env.EC2_IP}:3000"
+                            success = true
+                            break
                         }
 
-                        if (!success) {
-                            error("Frontend did not respond after ${maxAttempts} attempts.")
+                        if (i < maxAttempts) {
+                            sleep(waitSeconds)
                         }
+                    }
+
+                    if (!success) {
+                        error("Frontend did not respond after ${maxAttempts} attempts.")
                     }
                 }
             }
@@ -149,13 +117,10 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed successfully."
+            echo "Pipeline completed. App running at http://${env.EC2_IP}:3000"
         }
         failure {
             echo "Pipeline failed."
-        }
-        always {
-            sh "docker logout || true"
         }
     }
 }
