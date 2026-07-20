@@ -34,7 +34,7 @@ variable "associate_public_ip" {
 variable "root_volume_size" {
   description = "Size of the root EBS volume in GiB."
   type        = number
-  default     = 20
+  default     = 30
 }
 
 variable "public_key" {
